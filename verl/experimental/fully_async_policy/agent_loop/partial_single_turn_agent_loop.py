@@ -37,6 +37,7 @@ class PartialSingleTurnAgentLoop(AgentLoopBase):
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
         output: Optional[AgentLoopOutput] = kwargs.get("output", None)
         messages = list(kwargs["raw_prompt"])
+        # # 1. extract images and videos from messages
         multi_modal_data = await self.process_vision_info(messages)
         images = multi_modal_data.get("images")
         videos = multi_modal_data.get("videos")
@@ -67,6 +68,13 @@ class PartialSingleTurnAgentLoop(AgentLoopBase):
                     return model_inputs.pop("input_ids").squeeze(0).tolist()
 
                 prompt_ids = await self.loop.run_in_executor(None, get_prompt_ids)
+            # Refer to the implementation of the run function in verl/experimental/agent_loop/single_turn_agent_loop.py
+            elif self.processor is not None:
+                prompt_ids = await self.apply_chat_template(
+                    messages,
+                    images=images,
+                    videos=videos,
+                )
             else:
                 prompt_ids = await self.loop.run_in_executor(
                     None,
