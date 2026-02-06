@@ -192,15 +192,6 @@ class RLHFDataset(Dataset):
 
                 def doc2len(doc) -> int:
                     try:
-                        messages = self._build_messages(doc)
-                        # pass tool schemas if available so the processor can format prompts
-                        apply_kwargs = dict(**self.apply_chat_template_kwargs)
-                        if self.tool_schemas is not None:
-                            apply_kwargs["tools"] = self.tool_schemas
-
-                        raw_prompt = self.processor.apply_chat_template(
-                            messages, add_generation_prompt=True, tokenize=False, **apply_kwargs
-                        )
                         if image_key in doc and doc[image_key]:
                             images = [
                                 process_image(image, image_patch_size=self.image_patch_size) for image in doc[image_key]
@@ -224,6 +215,16 @@ class RLHFDataset(Dataset):
                         else:
                             videos = None
                             videos_kwargs = {}
+
+                        messages = self._build_messages(doc)
+                        # pass tool schemas if available so the processor can format prompts
+                        apply_kwargs = dict(**self.apply_chat_template_kwargs)
+                        if self.tool_schemas is not None:
+                            apply_kwargs["tools"] = self.tool_schemas
+
+                        raw_prompt = self.processor.apply_chat_template(
+                            messages, add_generation_prompt=True, tokenize=False, **apply_kwargs
+                        )
 
                         return len(
                             processor(text=[raw_prompt], images=images, videos=videos, videos_kwargs=videos_kwargs)[
