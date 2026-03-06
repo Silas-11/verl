@@ -92,8 +92,10 @@ class vLLMHttpServerForPartial(vLLMHttpServer):
             # support sglang-style 'max_new_tokens' param
             max_tokens = sampling_params.pop("max_new_tokens")
         else:
-            # Default to a calculation that considers configured lengths
-            max_tokens = self.config.response_length + self.config.prompt_length - len(prompt_ids)
+            # Normal case:          len(prompt_ids) <= prompt_length → max_tokens = response_length (no reduction)
+            # Multi-turn / partial: len(prompt_ids) >  prompt_length → previous responses are concatenated
+            #                       into prompt_ids, causing it to exceed the configured prompt_length
+            max_tokens = self.config.response_length - max(0, len(prompt_ids) - self.config.prompt_length)
 
         # Clamp max_tokens to the valid range [0, max_possible_tokens]
         max_tokens = max(0, min(max_tokens, max_possible_tokens))
