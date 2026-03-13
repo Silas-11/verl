@@ -142,6 +142,119 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False):
 
     return auto_wrap_policy
 
+def get_vision_tower_ignored_modules(vision_tower, cls_names, actor_module):
+    """
+    Automatically identify 'stray' modules in the vision tower that should be
+    excluded from FSDP management.
+
+    A module is considered 'stray' if it meets all of the following:
+    1. It is inside the vision_tower
+    2. It directly holds parameters (non-recursive)
+    3. It is not inside any wrapped_cls instance
+
+    When cls_names is empty, skip filtering and warn the user to avoid
+    incorrectly excluding all vision parameters from sharding.
+    """
+    rank = torch.distributed.get_rank()
+
+    if not cls_names:
+        if rank == 0:
+            print("[ignore] transformer_layer_cls_to_wrap is empty, "
+                  "skipping auto ignore. Consider setting use_orig_params=true.")
+        return []
+
+    # Resolve class names to actual classes
+    wrapped_cls = set()
+    for cls_name in cls_names:
+        cls = get_module_class_from_name(actor_module, cls_name)
+        if cls is not None:
+            wrapped_cls.add(cls)
+
+    if not wrapped_cls:
+        if rank == 0:
+            print("[ignore] No valid classes found from transformer_layer_cls_to_wrap, "
+                  "skipping auto ignore.")
+        return []
+
+    # Pre-collect all module ids that are inside a wrapped_cls instance.
+    # Use id() instead of object reference to avoid issues with __eq__ overrides.
+    inside_wrapped_ids = set()
+    for _, m in vision_tower.named_modules():
+        if isinstance(m, tuple(wrapped_cls)):
+            for _, sub in m.named_modules():
+                inside_wrapped_ids.add(id(sub))
+
+    # Filter stray modules
+    ignored_modules = []
+    for name, m in vision_tower.named_modules():
+        if not name:
+            continue
+        if isinstance(m, tuple(wrapped_cls)):
+            continue
+        if id(m) in inside_wrapped_ids:
+            continue
+        if not list(m.parameters(recurse=False)):
+            continue
+        ignored_modules.append(m)
+        if rank == 0:
+            param_count = sum(p.numel() for p in m.parameters(recurse=False))
+            print(f"[ignore] {name}: {m.__class__.__name__} ({param_count} params)")
+
+    if rank == 0:
+        total_ignored = sum(
+            p.numel() for m in ignored_modules for p in m.parameters(recurse=False)
+        )
+        print(f"[ignore] total ignored params: {total_ignored / 1e6:.1f}M")
+
+    # ---- Device migration ----
+    # rank 0 loads with CPU tensors; other ranks have Meta Tensors.
+    # FSDP's param_init_fn skips ignored_modules, so we handle them manually.
+    current_device = get_device_id()
+    if rank == 0:
+        for m in ignored_modules:
+            m.to(current_device)               # CPU tensor → GPU
+    else:
+        for m in ignored_modules:
+            m.to_empty(device=current_device)  # Meta Tensor → empty GPU Tensor (shape only, no data)
+            get_torch_device().empty_cache()   # Clear cache after each module, aligned with init_fn
+
+    # Ensure all ranks finish device migration before broadcasting
+    torch.distributed.barrier()
+
+    # ---- Broadcast ----
+    # Two important notes:
+    #   1. to_empty() replaces parameter objects in-place; previous references are
+    #      invalid and must be re-collected after migration.
+    #   2. Broadcast order must be identical across all ranks. Using set() is unsafe
+    #      (unordered) and can cause deadlocks if ranks broadcast in different orders.
+    ignored_tensors = []
+    seen_ids = set()
+    for m in ignored_modules:
+        for tensor in list(m.parameters()) + list(m.buffers()):
+            if id(tensor) not in seen_ids:
+                seen_ids.add(id(tensor))
+                ignored_tensors.append(tensor)
+
+    for tensor in ignored_tensors:
+        if not tensor.is_contiguous():
+            tensor.data = tensor.data.contiguous()
+        # group=None uses the default WORLD group, available after dist.init_process_group
+        torch.distributed.broadcast(tensor.data, src=0)
+
+    return ignored_modules
+
+
+def print_fsdp_info(fsdp_model):
+    """Print parameter distribution across FSDP Units for diagnosing wrap_policy configuration."""
+    if torch.distributed.get_rank() != 0:
+        return
+    for name, module in fsdp_model.named_modules():
+        if isinstance(module, FSDP):
+            handle = module._handle
+            if handle and not name:
+                total = handle.flat_param.numel()
+                print(f"[FSDP Unit] {name or 'ROOT'}: {total / 1e6:.1f}M elements")
+                print(handle.flat_param._param_infos)
 
 @torch.no_grad()
 def offload_fsdp_model_to_cpu(model: FSDP, empty_cache: bool = True):

@@ -75,6 +75,8 @@ from verl.utils.fsdp_utils import (
     offload_fsdp_model_to_cpu,
     offload_fsdp_optimizer,
     replace_lora_wrapper,
+    get_vision_tower_ignored_modules,
+    print_fsdp_info
 )
 from verl.utils.import_utils import import_external_libs
 from verl.utils.memory_utils import aggressive_empty_cache
@@ -532,15 +534,40 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     "bias": "none",
                 }
                 actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
-
         self.use_orig_params = fsdp_config.get("use_orig_params", False)
-        if self.config.actor.get("freeze_vision_tower", False):
+        ignored_modules = []
+
+        if self.config.actor.get("freeze_vision_tower", False) and optim_config is not None:
             vision_tower = get_vl_model_vision_tower(actor_module)
             if vision_tower is not None:
                 vision_tower.requires_grad_(False)
-                self.use_orig_params = True
+
+                auto_ignore = fsdp_config.get("wrap_policy", {}).get(
+                        "auto_ignore_vision_tower", False
+                    )
+
+                if auto_ignore:
+                    cls_names = fsdp_config.get("wrap_policy", {}).get(
+                        "transformer_layer_cls_to_wrap", []
+                    )
+                    ignored_modules = get_vision_tower_ignored_modules(
+                        vision_tower, cls_names, actor_module
+                    )
+                    if not ignored_modules:
+                        # Filtering returned nothing, fall back to use_orig_params
+                        self.use_orig_params = True
+                else:
+                    # User explicitly disabled auto ignore, fall back to use_orig_params
+                    self.use_orig_params = True
+
                 if self.rank == 0:
-                    print("[actor model] Vision tower is set to not trainable.")
+                    print("[actor model] Vision tower frozen.")
+                    if auto_ignore and ignored_modules:
+                        ignored_names = [
+                            name for name, m in actor_module.named_modules()
+                            if m in ignored_modules
+                        ]
+                        print(f"[actor model] Auto ignored modules: {ignored_names}")
             else:
                 if self.rank == 0:
                     print("[actor model] No vision tower found.")
@@ -610,6 +637,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 sync_module_states=True,
                 device_mesh=self.device_mesh,
                 use_orig_params=self.use_orig_params,
+                ignored_modules = ignored_modules,
                 forward_prefetch=fsdp_config.get("forward_prefetch", False),
             )
         elif fsdp_strategy == "fsdp2":
