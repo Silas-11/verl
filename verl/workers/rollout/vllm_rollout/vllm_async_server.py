@@ -210,17 +210,22 @@ class vLLMHttpServer:
             if _VLLM_VERSION >= version.parse("0.13.0"):
                 disable_cache = engine_kwargs.pop("disable_mm_preprocessor_cache")
                 if disable_cache:
-                    # True -> disable cache -> mm_processor_cache_gb=0
-                    logger.warning(
-                        "`disable_mm_preprocessor_cache` is not supported in vllm >= 0.13.0, "
-                        "automatically converting to `mm_processor_cache_gb=0`."
-                    )
-                    engine_kwargs.setdefault("mm_processor_cache_gb", 0)
+                    if "mm_processor_cache_gb" in engine_kwargs:
+                        if engine_kwargs["mm_processor_cache_gb"] != 0:
+                            logger.warning(
+                                f"'disable_mm_preprocessor_cache=True' is ignored because "
+                                f"'mm_processor_cache_gb' is already set to {engine_kwargs['mm_processor_cache_gb']}."
+                            )
+                    else:
+                        logger.warning(
+                            "'disable_mm_preprocessor_cache' is not supported in vllm >= 0.13.0, "
+                            "automatically converting to 'mm_processor_cache_gb=0'."
+                        )
+                        engine_kwargs["mm_processor_cache_gb"] = 0
                 else:
-                    # False -> keep default cache -> just remove the parameter
                     logger.warning(
-                        "`disable_mm_preprocessor_cache=False` is not supported in vllm >= 0.13.0, "
-                        "the parameter will be ignored (default cache behavior is preserved)."
+                        "'disable_mm_preprocessor_cache=False' is not supported in vllm >= 0.13.0, "
+                        "the parameter will be ignored."
                     )
 
         self._preprocess_engine_kwargs(engine_kwargs)
