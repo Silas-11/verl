@@ -616,7 +616,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             backend = checkpoint_engine_config.backend
             # Auto-adjust bucket size based on embedding weight size
             bucket_size_mb = get_minimum_bucket_size_mb(
-                hf_config=model_config,
+                hf_config=model_config.hf_config,
                 current_bucket_size_mb=checkpoint_engine_config.update_weights_bucket_megabytes,
             )
             bucket_size = bucket_size_mb << 20

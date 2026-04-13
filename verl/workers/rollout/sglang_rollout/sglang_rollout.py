@@ -126,11 +126,17 @@ class ServerAdapter(BaseRollout):
             self.model_config.hf_config.quantization_config = fp8_block_quant_kwargs
         self._engine: AsyncHttpServerAdapter = None
 
-        # Auto-adjust bucket size based on embedding weight size
-        self.bucket_size_mb = get_minimum_bucket_size_mb(
-            hf_config=self.model_config.hf_config,
-            current_bucket_size_mb=self.config.checkpoint_engine.update_weights_bucket_megabytes,
-        )
+        # model_config may not be HFModelConfig (e.g. DiffusionModelConfig or plain DictConfig),
+        # in that case skip auto-adjustment and use the configured value directly.
+        hf_config = self.model_config.hf_config if isinstance(self.model_config, HFModelConfig) else None
+
+        if hf_config is not None:
+            self.bucket_size_mb = get_minimum_bucket_size_mb(
+                hf_config=hf_config,
+                current_bucket_size_mb=self.config.checkpoint_engine.update_weights_bucket_megabytes,
+            )
+        else:
+            self.bucket_size_mb = self.config.checkpoint_engine.update_weights_bucket_megabytes
 
         rank = int(os.environ["RANK"])
         local_world_size = int(os.environ["RAY_LOCAL_WORLD_SIZE"])
