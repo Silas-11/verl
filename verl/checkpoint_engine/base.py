@@ -271,10 +271,10 @@ class CheckpointEngineWorker(Worker):
         if hf_config is not None:
             self.bucket_size_mb = get_minimum_bucket_size_mb(
                 hf_config=hf_config,
-                current_bucket_size_mb=self.config.checkpoint_engine.update_weights_bucket_megabytes,
+                current_bucket_size_mb=self.rollout_config.checkpoint_engine.update_weights_bucket_megabytes,
             )
         else:
-            self.bucket_size_mb = self.config.checkpoint_engine.update_weights_bucket_megabytes
+            self.bucket_size_mb = self.rollout_config.checkpoint_engine.update_weights_bucket_megabytes
 
         bucket_size = self.bucket_size_mb << 20
         engine_kwargs = self.rollout_config.checkpoint_engine.engine_kwargs.get(backend, {})
